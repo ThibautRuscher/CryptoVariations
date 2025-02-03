@@ -34,7 +34,7 @@ def fetch_prices():
         "XRP": data["ripple"]["usd"]
     }
 
-def check_alerts():
+def run_scraper():
     prices = fetch_prices()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
