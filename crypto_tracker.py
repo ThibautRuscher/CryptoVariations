@@ -27,7 +27,12 @@ conn.commit()
 # Scraper et vérification des alertes
 def fetch_prices():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd"
-    data = requests.get(url).json()
+    response = requests.get(url)
+    if response.status_code != 200:
+        print(f"Erreur dans la requête: {response.status_code}")
+        return {}
+    data = response.json()
+    print("Données reçues:", data)  # Pour débugger la réponse
     return {
         "BTC": data["bitcoin"]["usd"],
         "ETH": data["ethereum"]["usd"],
