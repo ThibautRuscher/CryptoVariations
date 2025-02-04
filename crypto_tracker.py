@@ -49,8 +49,8 @@ def run_scraper():
     volatile = df[df["price_change"].abs() > variation_value]
 
     # Envoi d'alerte Slack si besoin
-    if not volatile.empty:
-        send_slack_alert("🚨 Alerte Volatilité !\n" + volatile.to_string(index=False))
+    # if not volatile.empty:
+    #    send_slack_alert("🚨 Alerte Volatilité !\n" + volatile.to_string(index=False))
 
 def send_slack_alert(message):
     webhook_url = os.getenv("SLACK_WEBHOOK_URL")
