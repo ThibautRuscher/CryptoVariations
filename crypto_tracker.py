@@ -34,6 +34,11 @@ def fetch_prices():
         "XRP": data["ripple"]["usd"]
     }
 
+def send_slack_alert(message):
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    if webhook_url:
+        requests.post(webhook_url, json={"text": message})
+
 def run_scraper():
     prices = fetch_prices()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -43,20 +48,39 @@ def run_scraper():
 
     conn.commit()
 
-    # Vérification des variations de prix
-    df = pd.read_sql_query("SELECT * FROM prices", conn)
-    df["price_change"] = df.groupby("crypto")["price"].pct_change() * 100
-    volatile = df[df["price_change"].abs() > variation_value]
+    # Récupérer toutes les données en les triant par timestamp
+    df = pd.read_sql_query("SELECT * FROM prices ORDER BY timestamp", conn)
 
-    # Envoi d'alerte Slack si besoin
-    # if not volatile.empty:
-    #    send_slack_alert("🚨 Alerte Volatilité !\n" + volatile.to_string(index=False))
+    alerts = []
 
-def send_slack_alert(message):
-    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-    if webhook_url:
-        requests.post(webhook_url, json={"text": message})
+    # Pour chaque crypto, comparer uniquement les deux derniers enregistrements
+    for crypto, group in df.groupby("crypto"):
+        group = group.sort_values("timestamp")
+        if len(group) >= 2:
+            dernier = group.iloc[-1]
+            precedent = group.iloc[-2]
+            variation = ((dernier["price"] - precedent["price"]) / precedent["price"]) * 100
+            if abs(variation) > variation_value:
+                alerts.append({
+                    "crypto": crypto,
+                    "timestamp": dernier["timestamp"],
+                    "previous_price": precedent["price"],
+                    "current_price": dernier["price"],
+                    "price_change": variation
+                })
 
+    if alerts:
+        # Formatage du message pour Slack avec une mise en forme lisible
+        message = "🔔 *Alerte Volatilité* 🔔:\n\n"
+        for alert in alerts:
+            message += f"*Crypto*          : {alert['crypto']}\n"
+            message += f"*Heure*           : {alert['timestamp']}\n"
+            message += f"*Prix Précédent*  : {alert['previous_price']} USD\n"
+            message += f"*Prix Actuel*     : {alert['current_price']} USD\n"
+            message += f"*Variation*       : {alert['price_change']:.2f}%\n"
+            message += "---------------------------------------\n"
+
+        send_slack_alert(message)
 
 # Exécuter directement le scraper au lancement
 if __name__ == "__main__":
