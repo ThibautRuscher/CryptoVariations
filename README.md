@@ -5,7 +5,7 @@ A real-time cryptocurrency price monitoring system that tracks Bitcoin (BTC), Et
 
 Live Demo: [Access the Dashboard](https://cryptovariations-truscher.streamlit.app/)
 
-![Project Architecture](insert-architecture-diagram-url)
+![Project Architecture](Diagramme%20de%20flux.png)
 
 ## Features
 - **Real-time Price Tracking**: Monitors BTC, ETH, and XRP prices using the CoinGecko API
@@ -49,7 +49,6 @@ Live Demo: [Access the Dashboard](https://cryptovariations-truscher.streamlit.ap
     - Custom CSS
 - **Backend**:
     - Python
-    - Flask
     - psycopg2
     - requests
 - **Database**:
