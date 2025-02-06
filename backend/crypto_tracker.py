@@ -2,8 +2,7 @@ import psycopg2
 import requests
 import pandas as pd
 import os
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from datetime import datetime
 
 # Pourcentage de variation à partir du quel une alerte est envoyée
 variation_value = 2
