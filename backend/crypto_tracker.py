@@ -106,7 +106,7 @@ def calculate_stats(conn, current_timestamp):
     # Créer un DataFrame à partir des résultats
     columns = ['id', 'timestamp', 'crypto', 'price']
     df = pd.DataFrame(rows, columns=columns)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True).dt.tz_convert('Europe/Paris')
 
     # Convert timestamp_24h_ago to pandas datetime
     pd_timestamp_24h_ago = pd.Timestamp(timestamp_24h_ago)
