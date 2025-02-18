@@ -5,7 +5,6 @@ import plotly.subplots as sp
 from sqlalchemy import create_engine
 import pytz
 import datetime
-import time
 from typing import Dict, List
 
 # --- CONFIGURATION DE LA PAGE ---
@@ -97,8 +96,8 @@ def get_database_engine():
         return None
 
 @st.cache_data(ttl=300)
-def fetch_data() -> pd.DataFrame:
-    with st.spinner("Chargement des données..."):
+def fetch_price_data() -> pd.DataFrame:
+    with st.spinner("Chargement des données de prix..."):
         engine = get_database_engine()
         if engine:
             try:
@@ -109,77 +108,114 @@ def fetch_data() -> pd.DataFrame:
                 return pd.DataFrame()
     return pd.DataFrame()
 
-def process_data(df: pd.DataFrame) -> pd.DataFrame:
+@st.cache_data(ttl=300)
+def fetch_stats_data() -> pd.DataFrame:
+    with st.spinner("Chargement des statistiques..."):
+        engine = get_database_engine()
+        if engine:
+            try:
+                return pd.read_sql_query("SELECT * FROM stats", engine)
+            except Exception as e:
+                st.error("❌ Erreur lors de la récupération des statistiques")
+                st.exception(e)
+                return pd.DataFrame()
+    return pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def fetch_alerts_data() -> pd.DataFrame:
+    with st.spinner("Chargement des alertes..."):
+        engine = get_database_engine()
+        if engine:
+            try:
+                return pd.read_sql_query("SELECT * FROM alerts", engine)
+            except Exception as e:
+                st.error("❌ Erreur lors de la récupération des alertes")
+                st.exception(e)
+                return pd.DataFrame()
+    return pd.DataFrame()
+
+def process_price_data(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    try:
-        df["timestamp"] = df["timestamp"].dt.tz_localize("Europe/Paris", ambiguous="NaT")
-    except Exception:
-        pass
 
-    tz_paris = pytz.timezone("Europe/Paris")
-    current_offset = tz_paris.utcoffset(datetime.datetime.now())
-    df["timestamp_local"] = df["timestamp"] + current_offset
+    # S'assurer que le timestamp est au bon fuseau horaire
+    if df["timestamp"].dt.tz is None:
+        tz_paris = pytz.timezone("Europe/Paris")
+        df["timestamp"] = df["timestamp"].dt.tz_localize(tz_paris, ambiguous="NaT")
+
+    # Créer une version locale du timestamp pour l'affichage
+    df["timestamp_local"] = df["timestamp"]
     df["timestamp_str"] = df["timestamp_local"].dt.strftime("%Y-%m-%d %H:%M:%S")
-
-    # Calculs supplémentaires
-    df["price_change"] = df.groupby("crypto")["price"].pct_change() * 100
-    df["price_change_24h"] = df.groupby("crypto")["price"].pct_change(periods=288) * 100  # 288 = 24h (12 * 24)
-    df["volume"] = df.groupby("crypto")["price"].rolling(window=12).std().reset_index(0, drop=True)
 
     return df
 
-def calculate_statistics(df: pd.DataFrame, crypto: str) -> Dict:
-    df_crypto = df[df["crypto"] == crypto].sort_values("timestamp_local")
+def process_stats_data(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    # S'assurer que le timestamp est au bon fuseau horaire
+    if df["timestamp"].dt.tz is None:
+        tz_paris = pytz.timezone("Europe/Paris")
+        df["timestamp"] = df["timestamp"].dt.tz_localize(tz_paris, ambiguous="NaT")
+
+    df["timestamp_str"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    return df
+
+def process_alerts_data(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    # S'assurer que le timestamp est au bon fuseau horaire
+    if df["timestamp"].dt.tz is None:
+        tz_paris = pytz.timezone("Europe/Paris")
+        df["timestamp"] = df["timestamp"].dt.tz_localize(tz_paris, ambiguous="NaT")
+
+    df["timestamp_str"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    return df
+
+def get_latest_stats(df: pd.DataFrame, crypto: str) -> Dict:
+    df_crypto = df[df["crypto"] == crypto].sort_values("timestamp")
     if df_crypto.empty:
-        return {}
+        return {
+            "prix_actuel": 0,
+            "variation_24h": 0,
+            "plus_haut_24h": 0,
+            "plus_bas_24h": 0,
+            "volatilite": 0
+        }
 
-    latest_price = df_crypto["price"].iloc[-1]
-    price_24h_ago = df_crypto["price"].iloc[-288] if len(df_crypto) >= 288 else df_crypto["price"].iloc[0]
-    high_24h = df_crypto["price"].tail(288).max()
-    low_24h = df_crypto["price"].tail(288).min()
-
+    latest = df_crypto.iloc[-1]
     return {
-        "prix_actuel": latest_price,
-        "variation_24h": ((latest_price - price_24h_ago) / price_24h_ago * 100),
-        "plus_haut_24h": high_24h,
-        "plus_bas_24h": low_24h,
-        "volatilite": df_crypto["volume"].iloc[-1]
+        "prix_actuel": latest["current_price"],
+        "variation_24h": latest["price_change_24h_pct"],
+        "plus_haut_24h": latest["high_24h"],
+        "plus_bas_24h": latest["low_24h"],
+        "volatilite": latest["volume_5min"]
     }
 
-def calculate_time_difference(timestamp1, timestamp2) -> str:
-    diff = timestamp1 - timestamp2
-    minutes = int(diff.total_seconds() / 60)
-    if minutes < 60:
-        return f"{minutes} minute{'s' if minutes > 1 else ''}"
-    hours = minutes // 60
-    remaining_minutes = minutes % 60
-    if hours < 24:
-        return f"{hours}h{remaining_minutes:02d}"
-    days = hours // 24
-    remaining_hours = hours % 24
-    return f"{days}j {remaining_hours}h{remaining_minutes:02d}"
-
 # --- COMPOSANTS UI ---
-def render_metrics_dashboard(df: pd.DataFrame, selected_cryptos: List[str]):
+def render_metrics_dashboard(stats_df: pd.DataFrame, selected_cryptos: List[str]):
     st.subheader("📊 Statistiques globales")
     cols = st.columns(len(selected_cryptos))
 
     for i, crypto in enumerate(selected_cryptos):
-        stats = calculate_statistics(df, crypto)
-        if stats:
-            with cols[i]:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <h3 style="color: {CRYPTO_COLORS[crypto]};">{crypto}</h3>
-                    <p>Prix: ${stats['prix_actuel']:.2f}</p>
-                    <p>Variation 24h: {stats['variation_24h']:.2f}%</p>
-                    <p>Plus haut 24h: ${stats['plus_haut_24h']:.2f}</p>
-                    <p>Plus bas 24h: ${stats['plus_bas_24h']:.2f}</p>
-                </div>
-                """, unsafe_allow_html=True)
+        stats = get_latest_stats(stats_df, crypto)
+        with cols[i]:
+            st.markdown(f"""
+            <div class="stat-card">
+                <h3 style="color: {CRYPTO_COLORS[crypto]};">{crypto}</h3>
+                <p>Prix: ${stats['prix_actuel']:.2f}</p>
+                <p>Variation 24h: {stats['variation_24h']:.2f}%</p>
+                <p>Plus haut 24h: ${stats['plus_haut_24h']:.2f}</p>
+                <p>Plus bas 24h: ${stats['plus_bas_24h']:.2f}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 def render_price_chart(df: pd.DataFrame, selected_cryptos: List[str]):
     st.subheader("📈 Évolution des prix")
@@ -195,16 +231,12 @@ def render_price_chart(df: pd.DataFrame, selected_cryptos: List[str]):
     now = df["timestamp_local"].max()
     if timeframe == "24 heures":
         df_filtered = df[df["timestamp_local"] > (now - pd.Timedelta(days=1))]
-        marker_size = 6
     elif timeframe == "7 jours":
         df_filtered = df[df["timestamp_local"] > (now - pd.Timedelta(days=7))]
-        marker_size = 4
     elif timeframe == "30 jours":
         df_filtered = df[df["timestamp_local"] > (now - pd.Timedelta(days=30))]
-        marker_size = 2
     else:
         df_filtered = df
-        marker_size = 1
 
     fig = sp.make_subplots(
         rows=len(selected_cryptos),
@@ -240,73 +272,49 @@ def render_price_chart(df: pd.DataFrame, selected_cryptos: List[str]):
 
     st.plotly_chart(fig, use_container_width=True)
 
-def render_alerts(df: pd.DataFrame, selected_cryptos: List[str], threshold: float):
+def render_alerts(alerts_df: pd.DataFrame, selected_cryptos: List[str]):
     st.subheader("⚠️ Alertes de volatilité")
 
-    # Trouver les variations significatives
-    volatile_events = []
-    for crypto in selected_cryptos:
-        df_crypto = df[df["crypto"] == crypto].sort_values("timestamp_local")
-        for i in range(1, len(df_crypto)):
-            current_row = df_crypto.iloc[i]
-            if abs(current_row["price_change"]) > threshold:
-                prev_row = df_crypto.iloc[i-1]
-                time_diff = calculate_time_difference(
-                    current_row["timestamp_local"],
-                    prev_row["timestamp_local"]
-                )
-                volatile_events.append({
-                    "crypto": crypto,
-                    "start_time": prev_row["timestamp_local"],
-                    "start_time_str": prev_row["timestamp_str"],
-                    "end_time": current_row["timestamp_local"],
-                    "end_time_str": current_row["timestamp_str"],
-                    "price": current_row["price"],
-                    "prev_price": prev_row["price"],
-                    "price_change": current_row["price_change"],
-                    "time_diff": time_diff
-                })
+    if alerts_df.empty:
+        st.info("Aucune alerte de volatilité détectée.")
+        return
 
-    if volatile_events:
-        # Trier par timestamp décroissant
-        volatile_events.sort(key=lambda x: x["end_time"], reverse=True)
+    # Filtrer les alertes par crypto sélectionnées
+    filtered_alerts = alerts_df[alerts_df["crypto"].isin(selected_cryptos)]
 
-        for event in volatile_events:
-            variation_color = "green" if event["price_change"] > 0 else "red"
-            st.markdown(f"""
-            <div class="alert-card">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <span style="background-color:{CRYPTO_COLORS[event['crypto']]}; padding:5px 10px; border-radius:5px;">
-                        {event['crypto']}
-                    </span>
-                    <span>De {event['start_time_str']} à {event['end_time_str']}</span>
-                </div>
-                <div style="margin-top:10px;">
-                    <p>Prix initial: ${event['prev_price']:.2f}</p>
-                    <p>Prix final: ${event['price']:.2f}</p>
-                    <p>Variation: <span style="color:{variation_color}">{event['price_change']:.2f}%</span></p>
-                    <div class="alert-significance">
-                        Variation observée sur {event['time_diff']}
-                    </div>
+    if filtered_alerts.empty:
+        st.info("Aucune alerte pour les cryptomonnaies sélectionnées.")
+        return
+
+    # Trier par timestamp décroissant
+    filtered_alerts = filtered_alerts.sort_values("timestamp", ascending=False)
+
+    for _, alert in filtered_alerts.iterrows():
+        variation_color = "green" if alert["price_change_pct"] > 0 else "red"
+        st.markdown(f"""
+        <div class="alert-card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="background-color:{CRYPTO_COLORS[alert['crypto']]}; padding:5px 10px; border-radius:5px;">
+                    {alert['crypto']}
+                </span>
+                <span>Détectée le {alert['timestamp_str']}</span>
+            </div>
+            <div style="margin-top:10px;">
+                <p>Prix initial: ${alert['start_price']:.2f}</p>
+                <p>Prix final: ${alert['end_price']:.2f}</p>
+                <p>Variation: <span style="color:{variation_color}">{alert['price_change_pct']:.2f}%</span></p>
+                <div class="alert-significance">
+                    Variation observée sur {alert['time_interval']}
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.info("Aucune alerte de volatilité détectée avec les critères actuels.")
+        </div>
+        """, unsafe_allow_html=True)
 
 # --- INTERFACE PRINCIPALE ---
 def main():
     st.title("Suivi des prix cryptomonnaies")
 
-    # Chargement des données
-    df = fetch_data()
-    if df.empty:
-        st.error("Aucune donnée disponible.")
-        return
-
-    df = process_data(df)
-
-    # Sidebar
+    # Sidebar configuration
     st.sidebar.title("Configuration")
 
     # Par défaut, seule la crypto BTC est sélectionnée
@@ -324,56 +332,72 @@ def main():
     cols = st.sidebar.columns(len(CRYPTO_COLORS))
     for idx, crypto in enumerate(sorted(CRYPTO_COLORS.keys())):
         selected = crypto in st.session_state.selected_cryptos
-        # Utilisation de l'emoji "✅" pour les cryptos sélectionnées
         label = f"✅ {crypto}" if selected else crypto
-        # On ajoute une classe CSS "selected" si la crypto est cochée
-        button_html = f'<div><button class="{"selected" if selected else ""}">{label}</button></div>'
-        # On utilise st.markdown pour injecter le HTML et on déclenche le toggle au clic via st.button classique
         if cols[idx].button(label, key=f"btn_{crypto}", on_click=toggle_crypto, args=(crypto,)):
             pass
     st.sidebar.markdown("</div>", unsafe_allow_html=True)
 
     # Filtres
-    st.sidebar.markdown("### Filtres")
+    st.sidebar.markdown("### Filtres temporels")
+
+    # Chargement des données
+    prices_df = fetch_price_data()
+    if prices_df.empty:
+        st.error("Aucune donnée de prix disponible.")
+        return
+
+    prices_df = process_price_data(prices_df)
+
     date_range = st.sidebar.date_input(
         "Plage de dates",
-        [df["timestamp_local"].min().date(), df["timestamp_local"].max().date()]
+        [prices_df["timestamp_local"].min().date(), prices_df["timestamp_local"].max().date()]
     )
 
-    alert_threshold = st.sidebar.number_input(
-        "Seuil d'alerte sur 5 minutes (%)",
-        min_value=0.0,
-        value=2.0,  # Seuil par défaut à 2%
-        step=0.5,
-        help="Déclenche une alerte si la variation de prix dépasse ce seuil sur une période de 5 minutes"
-    )
+    # Filtrage des données par date
+    if len(date_range) == 2:
+        start_date, end_date = date_range
+        # Ajouter un jour à la date de fin pour inclure tout ce jour-là
+        end_date = end_date + datetime.timedelta(days=1)
+        prices_df = prices_df[
+            (prices_df["timestamp_local"].dt.date >= start_date) &
+            (prices_df["timestamp_local"].dt.date < end_date)
+            ]
 
     # Bouton de rafraîchissement
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Rafraîchir les données"):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
 
     # Sélection des cryptos par défaut (BTC) ou celles cochées par l'utilisateur
     selected_cryptos = st.session_state.selected_cryptos or ["BTC"]
 
-    # Filtrage des données par date
-    if len(date_range) == 2:
-        start_date, end_date = date_range
-        df = df[
-            (df["timestamp_local"].dt.date >= start_date) &
-            (df["timestamp_local"].dt.date <= end_date)
-            ]
+    # Chargement des statistiques et alertes
+    stats_df = fetch_stats_data()
+    if not stats_df.empty:
+        stats_df = process_stats_data(stats_df)
+
+    alerts_df = fetch_alerts_data()
+    if not alerts_df.empty:
+        alerts_df = process_alerts_data(alerts_df)
+        # Filtrage des alertes par date également
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            end_date = end_date + datetime.timedelta(days=1)
+            alerts_df = alerts_df[
+                (alerts_df["timestamp"].dt.date >= start_date) &
+                (alerts_df["timestamp"].dt.date < end_date)
+                ]
 
     # Interface principale avec onglets
     tab1, tab2 = st.tabs(["Graphiques", "Alertes"])
 
     with tab1:
-        render_metrics_dashboard(df, selected_cryptos)
-        render_price_chart(df, selected_cryptos)
+        render_metrics_dashboard(stats_df, selected_cryptos)
+        render_price_chart(prices_df, selected_cryptos)
 
     with tab2:
-        render_alerts(df, selected_cryptos, alert_threshold)
+        render_alerts(alerts_df, selected_cryptos)
 
 if __name__ == "__main__":
     main()
