@@ -108,6 +108,9 @@ def calculate_stats(conn, current_timestamp):
     df = pd.DataFrame(rows, columns=columns)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
 
+    # Convert timestamp_24h_ago to pandas datetime
+    pd_timestamp_24h_ago = pd.Timestamp(timestamp_24h_ago)
+
     for crypto in df['crypto'].unique():
         df_crypto = df[df['crypto'] == crypto].sort_values('timestamp')
 
@@ -122,9 +125,9 @@ def calculate_stats(conn, current_timestamp):
         price_change_pct = ((current_price - previous_price) / previous_price) * 100
 
         # Trouver le prix il y a 24h ou le premier disponible
-        idx_24h_ago = df_crypto[df_crypto['timestamp'] >= timestamp_24h_ago].index.min()
-        if pd.notna(idx_24h_ago):
-            price_24h_ago = df_crypto.loc[idx_24h_ago, 'price']
+        df_24h = df_crypto[df_crypto['timestamp'] >= pd_timestamp_24h_ago]
+        if not df_24h.empty:
+            price_24h_ago = df_24h['price'].iloc[0]
             price_change_24h_pct = ((current_price - price_24h_ago) / price_24h_ago) * 100
         else:
             price_change_24h_pct = 0
