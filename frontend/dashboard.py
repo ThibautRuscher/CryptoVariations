@@ -254,6 +254,7 @@ def render_price_chart(df: pd.DataFrame, selected_cryptos: List[str]):
                 y=df_crypto["price"],
                 mode='lines',
                 name=crypto,
+                connectgaps=False,
                 line=dict(color=CRYPTO_COLORS[crypto], width=1.5),
                 hovertemplate="<b>%{x}</b><br>" +
                               "Prix: $%{y:.2f}<br>" +
